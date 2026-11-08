@@ -1,0 +1,12 @@
+# Référence/fork volumineux
+_ref_openshorts/
+# Secrets & sessions
+.env
+profiles/
+# Logs & captures d'échec
+logs/
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
