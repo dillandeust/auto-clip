@@ -91,10 +91,24 @@ Le contenu source appartient à des tiers. L'utilisateur est seul responsable de
 - **Extensibilité multi-comptes** : le paramètre `profile` sélectionne le répertoire de session → ajouter un compte = ajouter un profil, zéro changement de code.
 
 #### `scheduler/` — file + worker
-- **File `post_queue`** (table DB) : `(id, clip_path, platform, profile, caption, scheduled_at, status, attempts, last_error, posted_url)`.
+- **Persistance : SQLite** (nouveau fichier `autoclip.db`), mono-utilisateur, local. **On n'utilise PAS** le Postgres de `cloud/models.py` (licence commerciale + multi-tenant inutile ici).
+- **File `post_queue`** (table SQLite) : `(id, job_id, clip_index, clip_path, platform, profile, caption, scheduled_at, status, attempts, last_error, posted_url, created_at)`.
   - États : `pending → in_progress → posted` | `failed` | `needs_manual`.
-- **Worker** : interroge périodiquement la file pour les posts dus (`scheduled_at <= now` et `status=pending`), appelle l'adaptateur Playwright correspondant, met à jour l'état. Réutilise le mécanisme de planification d'OpenShorts si présent ; sinon APScheduler.
-- **Approbation depuis le dashboard** : valider un clip dans l'UI insère une/des lignes dans `post_queue` avec l'horaire choisi.
+- **Worker** (nouveau process standalone) : OpenShorts n'a **aucun** scheduler en self-host (il déléguait à Upload-Post) → on l'écrit entièrement. Boucle qui interroge SQLite pour les posts dus (`scheduled_at <= now` ET `status=pending`), appelle l'adaptateur Playwright, met à jour l'état (APScheduler ou simple boucle `asyncio.sleep`).
+- **Approbation depuis le dashboard** : valider un clip insère une ligne `post_queue` par (clip, plateforme) avec l'horaire choisi.
+
+### 4.3 Points d'intégration tranchés (inspection OpenShorts)
+
+> Références vérifiées dans `_ref_openshorts/`.
+
+| Point | Fait vérifié | Décision AutoClip |
+|---|---|---|
+| **Seam de publication** | Toute publication passe par **une seule fonction** `post_to_socials()` (`app.py:6319`, endpoint `POST /api/social/post`), qui appelle Upload-Post. | **Remplacer le corps** de cette fonction : au lieu d'appeler Upload-Post, insérer dans `post_queue`. Signature + modèle `SocialPostRequest` **inchangés**. |
+| **Dashboard** | Le front React appelle déjà `/api/social/post` avec `scheduled_date`+`timezone`, et lit `/api/social/scheduled`, `/api/social/post-status/{id}`, `DELETE /api/social/scheduled/{id}`. | **Front quasi inchangé.** On ré-implémente ces 3-4 endpoints contre SQLite au lieu d'Upload-Post. |
+| **Clip & métadonnées** | Fichier en `OUTPUT_DIR/{job_id}/{file}` ; métadonnées dans `job['result']['clips'][i]` avec légendes déjà générées par plateforme (`video_description_for_tiktok`, `..._instagram`, `video_title_for_youtube_short`). | On réutilise ces légendes comme valeurs par défaut éditables. |
+| **Persistance jobs** | En self-host, jobs **en mémoire** (`jobs[job_id]`, `app.py:1332`), pas de DB. | Notre SQLite ne stocke que la file de posting (indépendant des jobs). |
+| **Repli manuel (UI)** | — | **Nouvelle section « À poster à la main »** dans le dashboard : liste les lignes `status=needs_manual` avec aperçu, légende pré-remplie, bouton télécharger. (Décision validée : vraie file UI, pas simple notif.) |
+| **LLM local** | `llm_backend.py` lit `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`. La détection **texte** (scoring du transcript) part sur Ollama ; les passes **vision** (`get_visual_clips`) nécessitent Gemini et **se dégradent proprement** sans clé. | **Full-free = détection basée transcript via Ollama.** Qualité à évaluer ; Gemini free tier reste activable en option. |
 
 ---
 
@@ -137,10 +151,11 @@ Source (URL Twitch/Kick/YouTube ou fichier local)
 
 ## 8. Configuration
 
-- `.env` :
-  - `LLM_PROVIDER=openai`, `OPENAI_BASE_URL=http://localhost:11434/v1` (Ollama), `OPENAI_MODEL=<modèle>`
+- `.env` (noms de variables **vérifiés** dans OpenShorts) :
+  - `LLM_PROVIDER=openai`, `LLM_BASE_URL=http://localhost:11434/v1` (Ollama), `LLM_MODEL=llama3.1:8b` (→ `qwen2.5:14b` si qualité insuffisante), `LLM_API_KEY=` (ignoré par Ollama), `LLM_TIMEOUT=600`
   - `TRANSCRIBE_BACKEND=whisper`, taille de modèle Whisper, flags GPU
-  - chemins `PROFILES_DIR`, `LOGS_DIR`, DB
+  - `GEMINI_API_KEY=` (optionnel : active les passes vision ; vide = détection texte seule, 100% gratuit)
+  - chemins `PROFILES_DIR`, `LOGS_DIR`, `AUTOCLIP_DB` (SQLite)
 - `profiles/<platform>/` : sessions Playwright (git-ignoré, contient des cookies de session → **secret**).
 - Prérequis système : Ollama installé + un modèle tiré, ffmpeg, pilotes NVIDIA/CUDA, navigateurs Playwright (`playwright install`).
 
@@ -162,21 +177,24 @@ clippping/
 │   ├── youtube.py
 │   └── login.py            # commande de login (headful)
 ├── scheduler/              # NOUVEAU : file + worker
-│   ├── queue.py            # modèle post_queue + transitions d'état
-│   └── worker.py
+│   ├── queue.py            # modèle post_queue SQLite + transitions d'état
+│   └── worker.py           # process standalone qui poste les clips dus
+├── autoclip.db             # SQLite (file post_queue) (git-ignoré)
 ├── profiles/               # sessions Playwright (git-ignoré)
 ├── logs/                   # captures d'écran d'échec (git-ignoré)
 ├── docs/superpowers/specs/ # ce document
 └── .env                    # config (git-ignoré)
 ```
 
-> La structure exacte d'intégration (fork autonome vs module à côté d'OpenShorts, point de câblage du dashboard vers `post_queue`) sera tranchée dans le plan d'implémentation après inspection du code d'OpenShorts (schéma DB, système de planification existant, API FastAPI du dashboard).
+> Point de câblage **tranché** (voir §4.3) : on remplace le corps de `post_to_socials()` (`app.py:6319`) pour enfiler dans `post_queue` (SQLite) au lieu d'appeler Upload-Post, et on ré-implémente `/api/social/scheduled` + `/api/social/post-status/{id}` contre SQLite. Le front React reste quasi inchangé (sauf ajout de la section « À poster à la main »).
 
 ---
 
-## 10. Risques & points ouverts (à lever dans le plan)
+## 10. Risques & points ouverts
 
+**Tranché après inspection (§4.3) :** seam d'intégration (`post_to_socials` / `app.py:6319`), persistance (SQLite, pas de couplage `cloud/`), repli manuel (vraie section UI), vars Ollama vérifiées.
+
+**Risques restants (assumés, mitigés) :**
 1. **Fragilité Playwright** : les UIs TikTok/IG/YT changent souvent → adaptateurs isolés + dry-run + captures pour diagnostic rapide. Risque accepté, mitigé par le repli manuel.
-2. **Intégration dashboard** : OpenShorts planifie via Upload-Post ; il faut identifier le point exact où brancher `post_queue` + le worker Playwright à la place. À confirmer par lecture du code.
-3. **CGU des plateformes** : l'automatisation navigateur est contre les CGU → risque de ban assumé, atténué par petit volume + comportement humain.
-4. **Ollama & qualité de détection** : la détection locale peut être moins fine que Gemini → modèle à choisir/évaluer pendant l'implémentation.
+2. **CGU des plateformes** : l'automatisation navigateur est contre les CGU → risque de ban assumé, atténué par petit volume + comportement humain.
+3. **Ollama & qualité de détection** : la détection locale (texte seul, sans vision Gemini) peut être moins fine → modèle à évaluer pendant l'implémentation (`llama3.1:8b` → `qwen2.5:14b`). Gemini free tier reste activable si besoin.
