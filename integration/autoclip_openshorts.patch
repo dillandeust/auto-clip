@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index a40232a..92efb9f 100644
+index a40232a..2e069c7 100644
 --- a/app.py
 +++ b/app.py
 @@ -6220,6 +6220,30 @@ async def translate_clip(
@@ -184,7 +184,7 @@ index a40232a..92efb9f 100644
 +    elif row["last_error"]:
 +        results.append({"platform": row["platform"], "success": False,
 +                        "message": row["last_error"]})
-+    return {"status": status_map.get(row["status"], "pending"), "results": results}
++    return {"status": status_map.get(row["status"], "unknown"), "results": results}
  
  
  # request_ids whose failure is already in the log: the dashboard polls every
@@ -223,7 +223,7 @@ index a40232a..92efb9f 100644
 +        clip = {}
 +        job = jobs.get(r["job_id"]) or {}
 +        clips = (job.get("result") or {}).get("clips") or []
-+        if r["clip_index"] < len(clips):
++        if 0 <= r["clip_index"] < len(clips):
 +            clip = clips[r["clip_index"]]
 +        items.append({
 +            "id": r["id"], "platform": r["platform"], "caption": r["caption"],
