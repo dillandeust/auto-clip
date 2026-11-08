@@ -1,0 +1,237 @@
+diff --git a/app.py b/app.py
+index a40232a..2e069c7 100644
+--- a/app.py
++++ b/app.py
+@@ -6220,6 +6220,30 @@ async def translate_clip(
+         "new_video_url": f"/videos/{req.job_id}/{output_filename}"
+     }
+ 
++# --- AutoClip integration: remplace Upload-Post par une file SQLite + worker Playwright ---
++from datetime import datetime as _ac_dt, timezone as _ac_tz
++from fastapi.responses import HTMLResponse as _ACHTMLResponse
++import autoclip as _ac_pkg
++from autoclip.config import load as _ac_load
++from autoclip.db import connect as _ac_connect
++from autoclip import queue as _ac_queue
++from autoclip.enqueue_api import enqueue_clip as _ac_enqueue
++from autoclip.manual_page import MANUAL_HTML as _AC_MANUAL_HTML
++
++_ac_cfg = _ac_load()
++# Le serveur (lancé depuis _ref_openshorts/) et le worker (lancé depuis la racine)
++# doivent partager le MÊME fichier SQLite -> on résout en absolu via la racine du package.
++_ac_project_root = os.path.dirname(os.path.dirname(os.path.abspath(_ac_pkg.__file__)))
++_ac_db_path = _ac_cfg.db_path if os.path.isabs(_ac_cfg.db_path) \
++    else os.path.join(_ac_project_root, _ac_cfg.db_path)
++_ac_conn = _ac_connect(_ac_db_path)
++_ac_queue.init_db(_ac_conn)
++
++
++def _ac_now() -> str:
++    return _ac_dt.now(_ac_tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
++
++
+ class SocialPostRequest(BaseModel):
+     job_id: str
+     clip_index: int
+@@ -6321,29 +6345,12 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
+     if req.job_id not in jobs:
+         raise HTTPException(status_code=404, detail="Job not found")
+ 
+-    # Resolve the Upload-Post key + profile. For managed users the server key is
+-    # used and their own profile is forced (body api_key / user_id are ignored).
+-    upload_key, forced_profile = await resolve_upload_post(request, req.api_key)
+-    if not upload_key:
+-        raise HTTPException(status_code=400, detail="Missing Upload-Post API key")
+-    post_user = resolve_post_profile(forced_profile, req.user_id)
+-
+     job = jobs[req.job_id]
+     await _assert_job_owner(request, job)
+     if 'result' not in job or 'clips' not in job['result']:
+         raise HTTPException(status_code=400, detail="Job result not available")
+     await _check_social_post_rate(request)
+ 
+-    if BILLING_ENABLED and forced_profile:
+-        stale = await _platforms_needing_reconnect(post_user, req.platforms)
+-        if stale:
+-            print(f"[social-post-failed] request=none platform={','.join(stale)} "
+-                  f"status=reauth_required message='refused before upload: reconnect needed'")
+-            names = ", ".join(p.capitalize() if p != "youtube" else "YouTube" for p in stale)
+-            raise HTTPException(status_code=409, detail=(
+-                f"Reconnect {names} first: its login has expired, so the post would "
+-                "fail. Use \"connect socials\" and try again."))
+-
+     try:
+         clip = job['result']['clips'][req.clip_index]
+         # Video URL is relative /videos/..., we need absolute file path
+@@ -6357,64 +6364,21 @@ async def post_to_socials(req: SocialPostRequest, request: Request):
+         if not os.path.exists(file_path):
+              raise HTTPException(status_code=404, detail=f"Video file not found: {file_path}")
+ 
+-        # Construct parameters for Upload-Post API
+-        # Fallbacks
+-        final_title = req.title or clip.get('title', 'Viral Short')
+-        final_description = req.description or clip.get('video_description_for_instagram') or clip.get('video_description_for_tiktok') or "Check this out!"
+-        
+-        # Prepare form data
+-        url = "https://api.upload-post.com/api/upload"
+-        headers = {
+-            "Authorization": f"Apikey {upload_key}"
+-        }
+-
+-        # Prepare data as dict (httpx handles lists for multiple values)
+-        data_payload = {
+-            "user": post_user,
+-            "title": final_title,
+-            "platform[]": req.platforms, # Pass list directly
+-            "async_upload": "true"  # Enable async upload
+-        }
+-
+-        # Add scheduling if present
+-        if req.scheduled_date:
+-            data_payload["scheduled_date"] = req.scheduled_date
+-            if req.timezone:
+-                data_payload["timezone"] = req.timezone
+-        
+-        # Add Platform specifics
+-        if "tiktok" in req.platforms:
+-             data_payload["tiktok_title"] = final_description
+-             data_payload["post_mode"] = TIKTOK_POST_MODE
+-             
+-        if "instagram" in req.platforms:
+-             data_payload["instagram_title"] = final_description
+-             data_payload["media_type"] = "REELS"
+-
+-        if "youtube" in req.platforms:
+-             yt_title = req.title or clip.get('video_title_for_youtube_short', final_title)
+-             data_payload["youtube_title"] = youtube_title(yt_title)
+-             data_payload["youtube_description"] = final_description
+-             data_payload["privacyStatus"] = "public"
+-
+-        # The upload is a blocking multipart POST of the whole clip (tens of
+-        # seconds for TikTok+YouTube). Run inline, it froze the event loop:
+-        # 23-sep-2026 19:47:48 UTC one post stalled every request, /health
+-        # included, for 42 s and the uptime monitor paged "openshorts-api
+-        # down". It runs in a worker thread so the API keeps answering.
+-        print(f"📡 Sending to Upload-Post for platforms: {req.platforms}")
+-        response = await asyncio.to_thread(
+-            _post_video_blocking, url, headers, data_payload, file_path, filename, 120.0
++        # AutoClip: au lieu d'envoyer à Upload-Post, on enfile une ligne par
++        # plateforme dans post_queue (SQLite). Le worker Playwright publiera
++        # à l'horaire prévu (scheduled_date) ou dès que possible.
++        caption = (req.description
++                   or clip.get('video_description_for_instagram')
++                   or clip.get('video_description_for_tiktok')
++                   or req.title or clip.get('title') or "")
++        ids = _ac_enqueue(
++            _ac_conn,
++            job_id=req.job_id, clip_index=req.clip_index, clip_path=file_path,
++            platforms=req.platforms, caption=caption,
++            scheduled_at=req.scheduled_date, now=_ac_now(),
+         )
+-
+-        if response.status_code not in [200, 201, 202]: # Added 201
+-             print(f"❌ Upload-Post Error: {response.text}")
+-             raise HTTPException(status_code=response.status_code, detail=f"Vendor API Error: {response.text}")
+-
+-        out = response.json()
+-        if isinstance(out, dict) and out.get("request_id"):
+-            _post_request_owners[str(out["request_id"])] = await _owner_id(request)
+-        return out
++        print(f"🗂️  AutoClip enqueued {req.platforms} -> post_queue ids={ids}")
++        return {"request_id": str(ids[0]), "queued_ids": ids, "status": "queued"}
+ 
+     except Exception as e:
+         print(f"❌ Social Post Exception: {e}")
+@@ -6429,30 +6393,23 @@ async def social_post_status(request_id: str, request: Request):
+     itself can still fail per platform, and the dashboard used to say "Posted
+     successfully!" either way.
+     """
+-    owner = _post_request_owners.get(request_id)
+-    if owner is None:
++    # AutoClip: statut d'une ligne post_queue (remplace le polling Upload-Post).
++    try:
++        row = _ac_queue.get(_ac_conn, int(request_id))
++    except (TypeError, ValueError):
+         return {"status": "unknown"}
+-    if owner != await _owner_id(request):
+-        raise HTTPException(status_code=404, detail="Not found")
+-    upload_key, _ = await resolve_upload_post(request, None)
+-    if not upload_key:
++    if not row:
+         return {"status": "unknown"}
+-    async with httpx.AsyncClient(timeout=20.0) as client:
+-        try:
+-            resp = await client.get("https://api.upload-post.com/api/uploadposts/status",
+-                                    headers={"Authorization": f"Apikey {upload_key}"},
+-                                    params={"request_id": request_id})
+-            data = resp.json()
+-        except Exception:
+-            return {"status": "unknown"}
+-    results = [
+-        {"platform": r.get("platform"), "success": r.get("success"),
+-         "message": r.get("message") or r.get("error")}
+-        for r in (data.get("results") or []) if isinstance(r, dict)
+-    ] if isinstance(data, dict) else []
+-    status = (data or {}).get("status") or "unknown"
+-    _log_post_failures(request_id, status, results)
+-    return {"status": status, "results": results}
++    status_map = {"posted": "completed", "needs_manual": "failed", "failed": "failed",
++                  "pending": "pending", "in_progress": "processing"}
++    results = []
++    if row["posted_url"]:
++        results.append({"platform": row["platform"], "success": True,
++                        "message": row["posted_url"]})
++    elif row["last_error"]:
++        results.append({"platform": row["platform"], "success": False,
++                        "message": row["last_error"]})
++    return {"status": status_map.get(row["status"], "unknown"), "results": results}
+ 
+ 
+ # request_ids whose failure is already in the log: the dashboard polls every
+@@ -6802,11 +6759,10 @@ async def _scheduled_posts_for(api_key: str, profile: str) -> list:
+ 
+ @app.get("/api/social/scheduled")
+ async def social_scheduled(request: Request, user: Optional[str] = None):
+-    """Pending scheduled posts for the caller's profile, soonest first."""
+-    api_key, profile = await _social_analytics_auth(request, user)
+-    rows = await _scheduled_posts_for(api_key, profile)
+-    rows.sort(key=lambda r: r.get("scheduled_date") or "")
+-    return {"profile_username": profile, "scheduled_posts": rows}
++    """AutoClip: posts en attente dans post_queue, triés par horaire."""
++    rows = [dict(r) for r in _ac_queue.list_by_status(_ac_conn, _ac_queue.PENDING)]
++    rows.sort(key=lambda r: r.get("scheduled_at") or "")
++    return {"profile_username": "autoclip", "scheduled_posts": rows}
+ 
+ 
+ @app.delete("/api/social/scheduled/{job_id}")
+@@ -6828,6 +6784,30 @@ async def social_cancel_scheduled(job_id: str, request: Request, user: Optional[
+     return {"success": True, "job_id": job_id}
+ 
+ 
++# --- AutoClip: repli manuel (clips dont la publication auto a échoué) ---
++
++@app.get("/manual", response_class=_ACHTMLResponse)
++async def autoclip_manual_page():
++    return _AC_MANUAL_HTML
++
++
++@app.get("/api/social/manual")
++async def autoclip_social_manual(request: Request):
++    rows = _ac_queue.list_by_status(_ac_conn, _ac_queue.NEEDS_MANUAL)
++    items = []
++    for r in rows:
++        clip = {}
++        job = jobs.get(r["job_id"]) or {}
++        clips = (job.get("result") or {}).get("clips") or []
++        if 0 <= r["clip_index"] < len(clips):
++            clip = clips[r["clip_index"]]
++        items.append({
++            "id": r["id"], "platform": r["platform"], "caption": r["caption"],
++            "last_error": r["last_error"], "download_url": clip.get("video_url", ""),
++        })
++    return {"items": items}
++
++
+ # --- Thumbnail Studio Endpoints ---
+ 
+ def thumbnail_transcribe_minutes(source_minutes) -> int:
