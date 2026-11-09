@@ -235,3 +235,50 @@ index a40232a..2e069c7 100644
  # --- Thumbnail Studio Endpoints ---
  
  def thumbnail_transcribe_minutes(source_minutes) -> int:
+diff --git a/dashboard/src/App.jsx b/dashboard/src/App.jsx
+index 12cc92f..df7da40 100644
+--- a/dashboard/src/App.jsx
++++ b/dashboard/src/App.jsx
+@@ -886,7 +886,9 @@ function App() {
+   // A self-hosted server running the moment picker on a local LLM
+   // (LLM_BASE_URL) does not need a Gemini key for the core pipeline.
+   const geminiOk = !!apiKey || !!localLlm;
+-  const keysMissing = !billingEnabled && (!geminiOk || !uploadPostKey);
++  // AutoClip: la publication passe par notre file + worker Playwright local,
++  // donc aucune clé Upload-Post n'est requise. Seul le LLM (Ollama) compte.
++  const keysMissing = !billingEnabled && !geminiOk;
+   const needsPlan = billingEnabled && !isManaged;   // hosted, signed-out or no active plan/trial
+ 
+   // Fresh sign-up: Clip Generator tutorial (AuthContext set os_show_clip_tutorial
+diff --git a/dashboard/src/components/ResultCard.jsx b/dashboard/src/components/ResultCard.jsx
+index e03643b..a1dfca1 100644
+--- a/dashboard/src/components/ResultCard.jsx
++++ b/dashboard/src/components/ResultCard.jsx
+@@ -690,8 +690,9 @@ export default function ResultCard({ clip, index, jobId, durable, uploadPostKey,
+         }
+     };
+ 
+-    // Managed (cloud plan/trial) users post with the server-side key — no BYOK needed
+-    const canPost = isManaged || (uploadPostKey && uploadUserId);
++    // AutoClip: publication via worker Playwright local -> toujours autorisé
++    // (le backend ignore api_key/user_id et enfile dans post_queue).
++    const canPost = true;
+ 
+     const handlePost = async () => {
+         if (!canPost) {
+diff --git a/dashboard/src/components/ScheduleWeekModal.jsx b/dashboard/src/components/ScheduleWeekModal.jsx
+index 1798570..0f1d1d7 100644
+--- a/dashboard/src/components/ScheduleWeekModal.jsx
++++ b/dashboard/src/components/ScheduleWeekModal.jsx
+@@ -112,8 +112,9 @@ export default function ScheduleWeekModal({ isOpen, onClose, clips, jobId, uploa
+ 
+     const selectedPlatforms = Object.keys(platforms).filter(k => platforms[k]);
+ 
+-    // Managed (cloud plan/trial) users post with the server-side key — no BYOK needed
+-    const canPost = isManaged || (uploadPostKey && uploadUserId);
++    // AutoClip: publication via worker Playwright local -> toujours autorisé
++    // (le backend ignore api_key/user_id et enfile dans post_queue).
++    const canPost = true;
+ 
+     const handleScheduleAll = async () => {
+         if (!canPost) return;
