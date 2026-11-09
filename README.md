@@ -52,13 +52,17 @@ autoclip login youtube
 ## Usage quotidien
 
 ```bash
-# Terminal 1 — backend + dashboard OpenShorts (voir _ref_openshorts/)
-cd _ref_openshorts && uvicorn app:app --host 0.0.0.0 --port 8000
+# Terminal 1 — backend (script qui exporte LD_LIBRARY_PATH pour Whisper GPU)
+./run_backend.sh
+
+# Terminal 2 — dashboard
 cd _ref_openshorts/dashboard && npm run dev
 
-# Terminal 2 — worker de publication (depuis la RACINE du projet)
-autoclip worker
+# Terminal 3 — worker de publication (depuis la RACINE du projet)
+.venv/bin/autoclip worker
 ```
+
+> Si tu restes en CPU (pas de GPU), `cd _ref_openshorts && ../.venv/bin/uvicorn app:app --port 8000` suffit (le `LD_LIBRARY_PATH` n'est utile que pour Whisper CUDA).
 
 1. Dans le dashboard : colle une URL (VOD Twitch/YouTube) ou un fichier → les clips sont générés.
 2. Valide les clips, édite légende/hashtags, coche les plateformes, choisis l'horaire, planifie.
@@ -78,6 +82,14 @@ sauf le clic « Publier » et sauvent une capture dans `logs/`), ex. :
 python -c "from autoclip.config import load; from autoclip.poster.tiktok import TikTokPoster; \
 print(TikTokPoster(load()).post('/chemin/clip.mp4', 'Test #fyp', dry_run=True))"
 ```
+
+## GPU (Whisper CUDA)
+
+Transcription sur GPU : drivers NVIDIA + libs `nvidia-cublas-cu12` et `nvidia-cudnn-cu12` dans le
+`.venv`, et `_ref_openshorts/.env` en `WHISPER_DEVICE=cuda WHISPER_COMPUTE=float16 WHISPER_MODEL=small`.
+Le backend DOIT alors être lancé via **`./run_backend.sh`** (il exporte le `LD_LIBRARY_PATH` vers ces libs).
+Le reste (YOLO/mediapipe) reste en CPU (torch CPU), volontairement, pour éviter la contention VRAM
+avec Ollama sur une carte 4 Go.
 
 ## Limites
 
