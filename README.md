@@ -55,13 +55,18 @@ autoclip login youtube
 # Terminal 1 — backend (script qui exporte LD_LIBRARY_PATH pour Whisper GPU)
 ./run_backend.sh
 
-# Terminal 2 — dashboard
-cd _ref_openshorts/dashboard && npm run dev
+# Terminal 2 — dashboard (script qui règle le proxy /api -> localhost:8000)
+./run_dashboard.sh
 
 # Terminal 3 — worker de publication (depuis la RACINE du projet)
 .venv/bin/autoclip worker
 ```
 
+> **Important** : lancer le dashboard via `./run_dashboard.sh` (et non `npm run dev` nu) :
+> le proxy Vite cible par défaut `http://backend:8000` (nom de service docker, injoignable
+> sur l'hôte) → le dashboard n'atteint pas l'API et affiche "required api keys missing".
+> Le script force `VITE_PROXY_TARGET=http://localhost:8000`.
+>
 > Si tu restes en CPU (pas de GPU), `cd _ref_openshorts && ../.venv/bin/uvicorn app:app --port 8000` suffit (le `LD_LIBRARY_PATH` n'est utile que pour Whisper CUDA).
 
 1. Dans le dashboard : colle une URL (VOD Twitch/YouTube) ou un fichier → les clips sont générés.
