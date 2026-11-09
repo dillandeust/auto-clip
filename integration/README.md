@@ -37,6 +37,15 @@ Régénérer le patch après de nouvelles modifs : `git -C _ref_openshorts diff 
   installe la 19.x → `TypeError: open() got an unexpected keyword argument 'metadata_errors'`
   à la transcription. Forcer `pip install "av==13.1.0"` dans le `.venv`.
 
+## Réglages perf / stabilité (machine modeste)
+
+- **`CLIP_WORKERS=2`** (défaut OpenShorts = 6) : nombre de clips recadrés en parallèle. À 6,
+  chaque worker charge YOLO + MediaPipe + torch + ffmpeg → sature 15 Go de RAM et fait planter
+  le backend (SIGTERM/OOM). 2 est stable.
+- **`MAX_CONCURRENT_JOBS=1`** : un seul job vidéo à la fois (poste mono-utilisateur).
+- Lancer les serveurs (`run_backend.sh`, `run_dashboard.sh`, `autoclip worker`) dans de VRAIS
+  terminaux, pas dans un process éphémère : un parent qui meurt envoie SIGTERM au serveur.
+
 ## Limites connues (hors scope)
 
 - Les endpoints **analytics / historique / gestion de comptes** et le
