@@ -30,6 +30,13 @@ git apply ../integration/autoclip_openshorts.patch
 
 Régénérer le patch après de nouvelles modifs : `git -C _ref_openshorts diff > integration/autoclip_openshorts.patch`.
 
+## Dépendances à épingler (compat)
+
+- **`av==13.1.0`** : faster-whisper 1.2.1 appelle `av.open(..., metadata_errors="ignore")`,
+  paramètre supprimé par PyAV ≥ 14. Le `requirements.txt` du fork ne fige pas `av`, donc pip
+  installe la 19.x → `TypeError: open() got an unexpected keyword argument 'metadata_errors'`
+  à la transcription. Forcer `pip install "av==13.1.0"` dans le `.venv`.
+
 ## Limites connues (hors scope)
 
 - Les endpoints **analytics / historique / gestion de comptes** et le
