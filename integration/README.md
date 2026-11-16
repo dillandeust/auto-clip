@@ -39,10 +39,21 @@ Régénérer le patch après de nouvelles modifs : `git -C _ref_openshorts diff 
 
 ## Réglages perf / stabilité (machine modeste)
 
-- **`CLIP_WORKERS=2`** (défaut OpenShorts = 6) : nombre de clips recadrés en parallèle. À 6,
+- **`FFMPEG_ENCODER=auto`** : encode les clips sur **NVENC** (bloc matériel dédié de la GTX 1650)
+  au lieu de `libx264` sur le CPU. L'encodage H.264 est la charge CPU la plus lourde et la plus
+  longue d'un rendu → le sortir du CPU fait chuter la chaleur et la conso. NVENC est un bloc
+  séparé des cœurs CUDA : il ne contend ni avec Whisper ni avec Ollama. `auto` sonde `h264_nvenc`
+  au démarrage et retombe sur `libx264` s'il échoue (log `🎞️ [Encoder] video encoder: ...`).
+- **`DETECT_STRIDE=8`** (défaut 4) : la détection de visage (YOLO/MediaPipe, sur CPU) ne tourne
+  que 1 frame sur 8 ; `SmoothedCameraman` interpole le mouvement de caméra entre les mesures.
+  Moitié moins de passes CPU pour un suivi quasi identique. Monter encore (12/16) si besoin.
+- **`CLIP_WORKERS=1`** (défaut OpenShorts = 6) : nombre de clips recadrés en parallèle. À 6,
   chaque worker charge YOLO + MediaPipe + torch + ffmpeg → sature 15 Go de RAM et fait planter
-  le backend (SIGTERM/OOM). 2 est stable.
+  le backend (SIGTERM/OOM). `1` = chaleur/CPU minimale (un seul encode à la fois) ; `2` = plus
+  rapide si la machine respire.
 - **`MAX_CONCURRENT_JOBS=1`** : un seul job vidéo à la fois (poste mono-utilisateur).
+- Leviers d'appoint : `MAX_SOURCE_MINUTES` (plafonne la durée source analysée), et générer moins
+  de clips par vidéo depuis le dashboard.
 - Lancer les serveurs (`run_backend.sh`, `run_dashboard.sh`, `autoclip worker`) dans de VRAIS
   terminaux, pas dans un process éphémère : un parent qui meurt envoie SIGTERM au serveur.
 
