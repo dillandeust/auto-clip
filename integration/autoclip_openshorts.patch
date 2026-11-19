@@ -246,6 +246,32 @@ index a40232a..9083420 100644
  # --- Thumbnail Studio Endpoints ---
  
  def thumbnail_transcribe_minutes(source_minutes) -> int:
+diff --git a/camera_inset.py b/camera_inset.py
+index 6bbbb4a..a42ff88 100644
+--- a/camera_inset.py
++++ b/camera_inset.py
+@@ -393,7 +393,9 @@ MAX_CAMERA_RATIO = 0.40
+ 
+ 
+ def inset_filtergraph(orig_w, orig_h, out_w, out_h, box, camera_ratio=None):
+-    """Screen on top at full width, the webcam inset below.
++    """AutoClip: webcam inset on TOP, screen at full width below.
++    (OpenShorts' original did screen-top/cam-below; swapped on demand so the
++    streamer's reaction reads first, gameplay underneath — the TikTok default.)
+ 
+     The screen keeps its whole width, which is the point: a game HUD or a
+     desktop puts what matters at the edges. The inset is scaled up so the person
+@@ -449,7 +451,8 @@ def inset_filtergraph(orig_w, orig_h, out_w, out_h, box, camera_ratio=None):
+         f"[bga]{blurred_backdrop(out_w, out_h, 14)}[bg];"
+         f"[sa]scale={out_w}:{screen_h}[screen];"
+         f"[ca]crop=w={w}:h={h}:x={x}:y={y},scale={out_w}:{cam_h}[cam];"
+-        f"[bg][screen]overlay=x=0:y={filler_h // 2}[withscreen];"
+-        f"[withscreen][cam]overlay=x=0:y={filler_h // 2 + screen_h},"
++        # AutoClip: camera (streamer) on top, screen (gameplay) below.
++        f"[bg][cam]overlay=x=0:y={filler_h // 2}[withcam];"
++        f"[withcam][screen]overlay=x=0:y={filler_h // 2 + cam_h},"
+         f"setsar=1[v]"
+     )
 diff --git a/dashboard/src/App.jsx b/dashboard/src/App.jsx
 index 12cc92f..b85d5e6 100644
 --- a/dashboard/src/App.jsx
